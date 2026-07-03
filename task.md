@@ -1,0 +1,23 @@
+# ChronoVault — Tasks
+
+- [x] Init Next.js 16 project
+- [x] Install @supabase/supabase-js
+- [/] Setup project structure
+  - [/] .env.local (placeholder)
+  - [ ] src/lib/supabase.ts
+  - [ ] src/lib/types.ts
+- [ ] Design system (globals.css)
+- [ ] Root layout (layout.tsx)
+- [ ] Pages
+  - [ ] / Home + Catalogue
+  - [ ] /product/[id] Page produit
+  - [ ] /cart Panier
+  - [ ] /admin Panel admin
+- [ ] API Routes
+  - [ ] /api/products GET
+  - [ ] /api/import-product POST
+  - [ ] /api/orders POST
+- [ ] Components
+  - [ ] Navbar
+  - [ ] ProductCard
+  - [ ] CartContext
