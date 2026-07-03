@@ -3093,6 +3093,13 @@ img { display: block; max-width: 100%; }
   grid-template-columns: 1.05fr 0.95fr;
   gap: 72px;
   margin-bottom: 80px;
+  align-items: start; /* chaque colonne a sa propre hauteur */
+}
+
+/* La colonne info reste visible pendant le scroll de la galerie */
+.pdp2-info {
+  position: sticky;
+  top: 120px; /* navbar (64px) + bandeau urgence (44px) + marge */
 }
 
 .pdp2-gallery { display: flex; gap: 14px; }
