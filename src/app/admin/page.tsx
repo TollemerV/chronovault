@@ -3,44 +3,123 @@
 import { useState, useEffect } from 'react'
 import type { Product, Order } from '@/lib/types'
 
+type Tab = 'import' | 'products' | 'orders'
+
+interface AEStatus {
+  connected: boolean
+  connectedAt?: string
+  accountId?: string
+}
+
 export default function AdminPage() {
   const [password, setPassword] = useState('')
   const [authenticated, setAuthenticated] = useState(false)
-  const [url, setUrl] = useState('')
-  const [sellingPrice, setSellingPrice] = useState('')
+  const [tab, setTab] = useState<Tab>('import')
+
+  /* ── Import ── */
+  const [importUrl, setImportUrl] = useState('')
+  const [fetching, setFetching] = useState(false)
+  const [fetchError, setFetchError] = useState('')
+
+  /* Champs produit (pré-remplis par le scraper) */
+  const [title, setTitle] = useState('')
+  const [images, setImages] = useState<string[]>([])
+  const [price, setPrice] = useState('')
+  const [sellPrice, setSellPrice] = useState('')
+  const [productId, setProductId] = useState('')
+  const [rating, setRating] = useState('4.5')
+  const [reviewCount, setReviewCount] = useState('0')
+  const [productFetched, setProductFetched] = useState(false)
+
+  /* Import final */
   const [importing, setImporting] = useState(false)
-  const [importResult, setImportResult] = useState<{ success?: boolean; message?: string } | null>(null)
+  const [importResult, setImportResult] = useState<{ ok: boolean; msg: string } | null>(null)
+
+  /* Catalogue & Commandes */
   const [products, setProducts] = useState<Product[]>([])
   const [orders, setOrders] = useState<Order[]>([])
-  const [tab, setTab] = useState<'import' | 'products' | 'orders'>('import')
+
+  /* AliExpress connexion */
+  const [aeStatus, setAeStatus] = useState<AEStatus>({ connected: false })
+  const [aeNotice, setAeNotice] = useState<{ ok: boolean; msg: string } | null>(null)
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault()
-    if (password === process.env.NEXT_PUBLIC_ADMIN_PASSWORD || password === 'admin') {
-      setAuthenticated(true)
-      loadData()
-    } else {
-      alert('Mot de passe incorrect')
-    }
+    if (password === 'admin') setAuthenticated(true)
+    else alert('Mot de passe incorrect')
   }
 
-  const loadData = async () => {
-    const [pRes, oRes] = await Promise.all([
-      fetch('/api/products'),
-      fetch('/api/orders'),
-    ])
-    if (pRes.ok) setProducts(await pRes.json())
-    if (oRes.ok) setOrders(await oRes.json())
+  const loadOrders = async () => {
+    const res = await fetch('/api/orders')
+    if (res.ok) setOrders(await res.json())
+  }
+
+  const loadAeStatus = async () => {
+    const res = await fetch('/api/auth/aliexpress/status')
+    if (res.ok) setAeStatus(await res.json())
   }
 
   useEffect(() => {
-    if (authenticated) loadData()
+    if (authenticated) {
+      loadOrders()
+      loadAeStatus()
+      // Vérifie si on revient du callback OAuth AliExpress
+      const params = new URLSearchParams(window.location.search)
+      if (params.get('ae_connected') === '1') {
+        setAeNotice({ ok: true, msg: '✓ Compte AliExpress connecté avec succès !' })
+        window.history.replaceState({}, '', '/admin')
+      }
+      if (params.get('ae_error')) {
+        setAeNotice({ ok: false, msg: `Erreur AliExpress : ${params.get('ae_error')}` })
+        window.history.replaceState({}, '', '/admin')
+      }
+    }
   }, [authenticated])
 
+
+  /* Auto-calcul prix de vente ×2.5 */
+  useEffect(() => {
+    if (price) {
+      const cost = parseFloat(price)
+      if (!isNaN(cost) && cost > 0)
+        setSellPrice((Math.ceil((cost * 2.5) / 5) * 5 - 0.01).toFixed(2))
+    }
+  }, [price])
+
+  /* ── Scrape AliExpress ── */
+  const handleFetch = async () => {
+    if (!importUrl.trim()) return
+    setFetching(true)
+    setFetchError('')
+    setProductFetched(false)
+
+    try {
+      const res = await fetch(`/api/scrape-product?url=${encodeURIComponent(importUrl)}`)
+      const data = await res.json()
+
+      if (!res.ok || !data.ok) {
+        setFetchError(data.error ?? 'Impossible de récupérer ce produit')
+        return
+      }
+
+      setTitle(data.title ?? '')
+      setImages(data.images ?? [])
+      setPrice(String(data.price ?? ''))
+      setRating(String(data.rating ?? 4.5))
+      setReviewCount(String(data.reviewCount ?? 0))
+      setProductId(data.productId ?? '')
+      setProductFetched(true)
+    } catch {
+      setFetchError('Erreur réseau — vérifie ta connexion')
+    } finally {
+      setFetching(false)
+    }
+  }
+
+  /* ── Import vers Supabase ── */
   const handleImport = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!url) return
-
+    if (!title) return
     setImporting(true)
     setImportResult(null)
 
@@ -48,234 +127,325 @@ export default function AdminPage() {
       const res = await fetch('/api/import-product', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, selling_price: parseFloat(sellingPrice) || 89 }),
+        body: JSON.stringify({
+          aliexpress_id: productId || `manual-${Date.now()}`,
+          title,
+          images,
+          price: parseFloat(price) || 0,
+          selling_price: parseFloat(sellPrice) || 0,
+          rating: parseFloat(rating) || 4.5,
+          review_count: parseInt(reviewCount) || 0,
+          category: 'montres',
+          description: title,
+        }),
       })
       const data = await res.json()
+
       if (res.ok) {
-        setImportResult({ success: true, message: `✅ Produit "${data.product.title}" importé avec succès !` })
-        setUrl('')
-        setSellingPrice('')
-        loadData()
+        setImportResult({ ok: true, msg: `✓ "${data.product?.title}" importé dans Supabase` })
+        setProducts(prev => [data.product, ...prev.filter(p => p.id !== data.product?.id)])
+        // Reset
+        setImportUrl(''); setTitle(''); setImages([]); setPrice(''); setSellPrice('')
+        setProductId(''); setRating('4.5'); setReviewCount('0'); setProductFetched(false)
       } else {
-        setImportResult({ success: false, message: `❌ Erreur : ${data.error}` })
+        setImportResult({ ok: false, msg: data.error ?? 'Erreur' })
       }
     } catch {
-      setImportResult({ success: false, message: '❌ Erreur réseau' })
+      setImportResult({ ok: false, msg: 'Erreur réseau' })
     } finally {
       setImporting(false)
     }
   }
 
+  const resetForm = () => {
+    setImportUrl(''); setTitle(''); setImages([]); setPrice(''); setSellPrice('')
+    setProductId(''); setRating('4.5'); setReviewCount('0'); setProductFetched(false)
+    setFetchError(''); setImportResult(null)
+  }
+
+  /* ────── Login ────── */
   if (!authenticated) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', padding: '24px' }}>
-        <div style={{ width: '100%', maxWidth: '380px' }}>
-          <h1 style={{ fontFamily: 'Playfair Display, serif', fontSize: '1.8rem', marginBottom: '8px', textAlign: 'center' }}>
-            Admin ChronoVault
-          </h1>
-          <p style={{ color: 'var(--text-muted)', textAlign: 'center', marginBottom: '32px', fontSize: '0.9rem' }}>
-            Panneau de gestion réservé
-          </p>
-          <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            <div className="form-group">
-              <label className="form-label">Mot de passe</label>
-              <input
-                type="password"
-                className="form-input"
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                placeholder="••••••••"
-                autoFocus
-              />
-            </div>
-            <button type="submit" className="btn-primary" style={{ justifyContent: 'center' }}>
-              Accéder au panneau →
-            </button>
+      <div className="admin-login">
+        <div className="admin-login-card">
+          <p className="admin-login-brand">ChronoVault</p>
+          <h1 className="admin-login-title">Administration</h1>
+          <form onSubmit={handleLogin} className="admin-login-form">
+            <input type="password" className="admin-input" value={password}
+              onChange={e => setPassword(e.target.value)} placeholder="Mot de passe" autoFocus />
+            <button type="submit" className="admin-btn-primary">Accéder →</button>
           </form>
         </div>
       </div>
     )
   }
 
+  /* ────── Dashboard ────── */
   return (
-    <div className="admin-page">
-      <div className="admin-header">
-        <h1 style={{ fontFamily: 'Playfair Display, serif', fontSize: '2rem', marginBottom: '8px' }}>
-          Panneau Admin
-        </h1>
-        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-          {products.length} produits · {orders.length} commandes
-        </p>
-      </div>
+    <div className="admin-wrap">
 
-      {/* Tabs */}
-      <div style={{ display: 'flex', gap: '8px', marginBottom: '32px', borderBottom: '1px solid var(--border)', paddingBottom: '0' }}>
-        {(['import', 'products', 'orders'] as const).map(t => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            style={{
-              padding: '10px 20px',
-              background: 'none',
-              border: 'none',
-              borderBottom: tab === t ? '2px solid var(--gold)' : '2px solid transparent',
-              color: tab === t ? 'var(--gold-light)' : 'var(--text-muted)',
-              cursor: 'pointer',
-              fontWeight: 600,
-              fontSize: '0.875rem',
-              marginBottom: '-1px',
-              transition: 'var(--transition)',
-              textTransform: 'capitalize',
-            }}
-          >
-            {t === 'import' ? '📥 Importer' : t === 'products' ? '⌚ Produits' : '📦 Commandes'}
-          </button>
-        ))}
-      </div>
+      {/* Sidebar */}
+      <aside className="admin-sidebar">
+        <div className="admin-sidebar-logo">
+          <span>ChronoVault</span>
+          <span className="admin-sidebar-sub">Admin</span>
+        </div>
+        <nav className="admin-nav">
+          {([
+            { id: 'import', icon: '📥', label: 'Importer un produit' },
+            { id: 'products', icon: '⌚', label: 'Catalogue' },
+            { id: 'orders', icon: '📦', label: 'Commandes' },
+          ] as { id: Tab; icon: string; label: string }[]).map(item => (
+            <button key={item.id}
+              className={`admin-nav-item ${tab === item.id ? 'active' : ''}`}
+              onClick={() => setTab(item.id)}>
+              <span className="admin-nav-icon">{item.icon}</span>
+              <span>{item.label}</span>
+            </button>
+          ))}
+        </nav>
+        <div className="admin-sidebar-stats">
+          <div className="admin-stat">
+            <span className="admin-stat-val">{products.length}</span>
+            <span className="admin-stat-label">Importés</span>
+          </div>
+          <div className="admin-stat">
+            <span className="admin-stat-val">{orders.length}</span>
+            <span className="admin-stat-label">Commandes</span>
+          </div>
+        </div>
 
-      {/* ─── Tab Import ─── */}
-      {tab === 'import' && (
-        <div style={{ maxWidth: '600px' }}>
-          <div className="admin-card">
-            <h2 className="admin-card-title">📥 Importer un produit AliExpress</h2>
-            <form className="import-form" onSubmit={handleImport}>
-              <div className="form-group">
-                <label className="form-label">Lien AliExpress</label>
-                <input
-                  type="url"
-                  className="form-input"
-                  value={url}
-                  onChange={e => setUrl(e.target.value)}
-                  placeholder="https://www.aliexpress.com/item/123456789.html"
-                  required
-                />
+        {/* AliExpress connexion */}
+        <div className="admin-ae-connect">
+          {aeNotice && (
+            <div className={`admin-ae-notice ${aeNotice.ok ? 'ok' : 'err'}`}>
+              {aeNotice.msg}
+            </div>
+          )}
+          {aeStatus.connected ? (
+            <div className="admin-ae-connected">
+              <span className="admin-ae-dot connected" />
+              <div>
+                <p className="admin-ae-label">AliExpress connecté</p>
+                {aeStatus.connectedAt && (
+                  <p className="admin-ae-sub">
+                    {new Date(aeStatus.connectedAt).toLocaleDateString('fr-FR')}
+                  </p>
+                )}
               </div>
-              <div className="form-group">
-                <label className="form-label">Prix de vente (€)</label>
-                <input
-                  type="number"
-                  className="form-input"
-                  value={sellingPrice}
-                  onChange={e => setSellingPrice(e.target.value)}
-                  placeholder="89.00"
-                  step="0.01"
-                  min="0"
-                />
-              </div>
-              <button type="submit" className="btn-primary" disabled={importing} style={{ justifyContent: 'center' }}>
-                {importing ? '⏳ Import en cours...' : '📥 Importer le produit'}
-              </button>
-            </form>
+              <a href="/api/auth/aliexpress" className="admin-ae-reconnect">↻</a>
+            </div>
+          ) : (
+            <a href="/api/auth/aliexpress" className="admin-ae-btn">
+              🔗 Connecter AliExpress
+            </a>
+          )}
+        </div>
+      </aside>
 
-            {importResult && (
-              <div style={{
-                marginTop: '16px',
-                padding: '14px',
-                borderRadius: 'var(--radius-sm)',
-                background: importResult.success ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)',
-                border: `1px solid ${importResult.success ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'}`,
-                fontSize: '0.9rem',
-                color: importResult.success ? '#22c55e' : '#ef4444',
-              }}>
-                {importResult.message}
+      {/* Main */}
+      <main className="admin-main">
+
+        {/* ══ IMPORT ══ */}
+        {tab === 'import' && (
+          <div className="admin-section">
+            <div className="admin-section-header">
+              <div>
+                <h2 className="admin-section-title">Importer un produit</h2>
+                <p className="admin-section-sub">Colle une URL AliExpress — les données sont récupérées automatiquement</p>
+              </div>
+              {productFetched && (
+                <button className="admin-btn-secondary" onClick={resetForm}>← Nouveau produit</button>
+              )}
+            </div>
+
+            {/* ── Étape 1 : URL ── */}
+            {!productFetched && (
+              <div className="admin-url-step">
+                <div className="admin-step-number">1</div>
+                <div style={{ flex: 1 }}>
+                  <label className="admin-label" style={{ marginBottom: '10px', display: 'block' }}>
+                    URL du produit AliExpress
+                  </label>
+                  <div className="admin-search-bar">
+                    <input
+                      className="admin-input admin-search-input"
+                      type="url"
+                      value={importUrl}
+                      onChange={e => setImportUrl(e.target.value)}
+                      onKeyDown={e => e.key === 'Enter' && handleFetch()}
+                      placeholder="https://fr.aliexpress.com/item/1234567890.html"
+                    />
+                    <button
+                      className="admin-btn-primary"
+                      onClick={handleFetch}
+                      disabled={fetching || !importUrl.trim()}
+                    >
+                      {fetching ? 'Récupération…' : 'Récupérer →'}
+                    </button>
+                  </div>
+
+                  {fetchError && (
+                    <div className="admin-alert error" style={{ marginTop: '12px' }}>
+                      {fetchError}
+                    </div>
+                  )}
+
+                  <p className="admin-field-hint" style={{ marginTop: '10px' }}>
+                    💡 Trouve tes produits sur{' '}
+                    <a href="https://fr.aliexpress.com" target="_blank" rel="noreferrer"
+                      style={{ color: 'var(--gold)', textDecoration: 'none' }}>
+                      fr.aliexpress.com
+                    </a>{' '}
+                    ou{' '}
+                    <a href="https://dropshipping.aliexpress.com" target="_blank" rel="noreferrer"
+      style={{ color: 'var(--gold)', textDecoration: 'none' }}>
+                      DS Center
+                    </a>
+                    , puis colle l'URL ici.
+                  </p>
+                </div>
               </div>
             )}
 
-            <div style={{ marginTop: '20px', padding: '16px', background: 'rgba(201,168,76,0.05)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-              <strong style={{ color: 'var(--gold)' }}>ℹ️ Mode actuel : Mock</strong><br />
-              L'import réel sera activé dès réception de tes clés API AliExpress.
-              Pour l'instant, un produit de démonstration est créé.
-            </div>
+            {/* ── Étape 2 : Preview & édition ── */}
+            {productFetched && (
+              <form onSubmit={handleImport} className="admin-product-preview">
+
+                {/* Galerie images */}
+                {images.length > 0 && (
+                  <div>
+                    <p className="admin-label" style={{ marginBottom: '10px' }}>
+                      Images ({images.length})
+                    </p>
+                    <div className="admin-img-gallery">
+                      {images.slice(0, 6).map((img, i) => (
+                        <div key={i} className={`admin-img-thumb ${i === 0 ? 'main' : ''}`}>
+                          <img src={img} alt={`Image ${i + 1}`} loading="lazy" />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Champs */}
+                <div className="admin-field">
+                  <label className="admin-label">Titre</label>
+                  <input className="admin-input" type="text" value={title}
+                    onChange={e => setTitle(e.target.value)} required />
+                </div>
+
+                <div className="admin-field-row">
+                  <div className="admin-field">
+                    <label className="admin-label">Coût AliExpress (€)</label>
+                    <input className="admin-input" type="number" step="0.01" min="0"
+                      value={price} onChange={e => setPrice(e.target.value)} />
+                  </div>
+                  <div className="admin-field">
+                    <label className="admin-label">
+                      Prix de vente (€){' '}
+                      <span style={{ color: 'var(--gold)', fontSize: '0.6rem' }}>auto ×2.5</span>
+                    </label>
+                    <input className="admin-input" type="number" step="0.01" min="0"
+                      value={sellPrice} onChange={e => setSellPrice(e.target.value)} />
+                  </div>
+                </div>
+
+                {/* Marge calculée */}
+                {price && sellPrice && (
+                  <div className="admin-margin-preview">
+                    <span>Marge estimée :</span>
+                    <strong style={{ color: '#22c55e' }}>
+                      +{Math.round(((parseFloat(sellPrice) - parseFloat(price)) / parseFloat(sellPrice)) * 100)}%
+                    </strong>
+                    <span style={{ color: 'var(--grey)' }}>
+                      · profit net ≈ {(parseFloat(sellPrice) - parseFloat(price)).toFixed(2)}€ / vente
+                    </span>
+                  </div>
+                )}
+
+                {importResult && (
+                  <div className={`admin-alert ${importResult.ok ? 'success' : 'error'}`}>
+                    {importResult.msg}
+                  </div>
+                )}
+
+                <button type="submit" className="admin-btn-primary"
+                  disabled={importing || !title}
+                  style={{ alignSelf: 'flex-start', padding: '13px 32px' }}>
+                  {importing ? 'Import…' : '📥 Importer dans Supabase'}
+                </button>
+              </form>
+            )}
           </div>
-        </div>
-      )}
+        )}
 
-      {/* ─── Tab Products ─── */}
-      {tab === 'products' && (
-        <div>
-          {products.length === 0 ? (
-            <div className="empty-state">
-              <div className="empty-state-icon">⌚</div>
-              <p>Aucun produit encore. Importe ton premier produit !</p>
+        {/* ══ CATALOGUE ══ */}
+        {tab === 'products' && (
+          <div className="admin-section">
+            <div className="admin-section-header">
+              <h2 className="admin-section-title">Catalogue Supabase</h2>
             </div>
-          ) : (
-            <div className="table-wrapper">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Image</th>
-                    <th>Titre</th>
-                    <th>Coût</th>
-                    <th>Prix vente</th>
-                    <th>Marge</th>
-                    <th>Stock</th>
-                    <th>Note</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {products.map(p => {
-                    const margin = ((p.selling_price - p.price) / p.selling_price * 100).toFixed(0)
-                    return (
-                      <tr key={p.id}>
-                        <td>
-                          <img src={p.images[0]} alt={p.title} style={{ width: 48, height: 48, objectFit: 'cover', borderRadius: 8 }} />
-                        </td>
-                        <td style={{ color: 'var(--text-primary)', maxWidth: 200 }}>{p.title}</td>
-                        <td>€{p.price.toFixed(2)}</td>
-                        <td style={{ color: 'var(--gold-light)', fontWeight: 600 }}>€{p.selling_price.toFixed(2)}</td>
-                        <td><span style={{ color: '#22c55e', fontWeight: 600 }}>{margin}%</span></td>
-                        <td>{p.stock}</td>
-                        <td>⭐ {p.rating}</td>
+            {products.length === 0 ? (
+              <div className="admin-empty">
+                <span>⌚</span>
+                <p>Aucun produit importé.</p>
+              </div>
+            ) : (
+              <div className="admin-table-wrap">
+                <table className="admin-table">
+                  <thead>
+                    <tr><th>Image</th><th>Titre</th><th>Coût</th><th>Prix vente</th><th>Marge</th><th>Stock</th></tr>
+                  </thead>
+                  <tbody>
+                    {products.map(p => {
+                      const margin = ((p.selling_price - p.price) / p.selling_price * 100).toFixed(0)
+                      return (
+                        <tr key={p.id}>
+                          <td>{p.images?.[0] && <img src={p.images[0]} alt={p.title} className="admin-table-thumb" />}</td>
+                          <td className="admin-table-title">{p.title}</td>
+                          <td>{p.price?.toFixed(2)}€</td>
+                          <td className="admin-table-price">{p.selling_price?.toFixed(2)}€</td>
+                          <td><span className="admin-table-margin">+{margin}%</span></td>
+                          <td>{p.stock}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ══ COMMANDES ══ */}
+        {tab === 'orders' && (
+          <div className="admin-section">
+            <div className="admin-section-header">
+              <h2 className="admin-section-title">Commandes</h2>
+            </div>
+            {orders.length === 0 ? (
+              <div className="admin-empty"><span>📦</span><p>Aucune commande.</p></div>
+            ) : (
+              <div className="admin-table-wrap">
+                <table className="admin-table">
+                  <thead><tr><th>Date</th><th>Client</th><th>Total</th><th>Statut</th></tr></thead>
+                  <tbody>
+                    {orders.map((o: Order) => (
+                      <tr key={o.id}>
+                        <td>{new Date(o.created_at).toLocaleDateString('fr-FR')}</td>
+                        <td className="admin-table-title">{o.customer_name}</td>
+                        <td className="admin-table-price">{o.total?.toFixed(2)}€</td>
+                        <td><span className={`admin-status admin-status-${o.status}`}>{o.status}</span></td>
                       </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ─── Tab Orders ─── */}
-      {tab === 'orders' && (
-        <div>
-          {orders.length === 0 ? (
-            <div className="empty-state">
-              <div className="empty-state-icon">📦</div>
-              <p>Aucune commande pour l&apos;instant.</p>
-            </div>
-          ) : (
-            <div className="table-wrapper">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Date</th>
-                    <th>Client</th>
-                    <th>Email</th>
-                    <th>Total</th>
-                    <th>Statut</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {orders.map((o: Order) => (
-                    <tr key={o.id}>
-                      <td>{new Date(o.created_at).toLocaleDateString('fr-FR')}</td>
-                      <td style={{ color: 'var(--text-primary)' }}>{o.customer_name}</td>
-                      <td>{o.customer_email}</td>
-                      <td style={{ color: 'var(--gold-light)', fontWeight: 600 }}>€{o.total.toFixed(2)}</td>
-                      <td>
-                        <span className={`status-tag status-${o.status}`}>
-                          {o.status}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      )}
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+      </main>
     </div>
   )
 }
