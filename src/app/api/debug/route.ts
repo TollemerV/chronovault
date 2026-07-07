@@ -13,7 +13,7 @@ function sign(params: Record<string, string>): string {
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
-  const method = searchParams.get('method') ?? 'aliexpress.ds.product.search'
+  const method = searchParams.get('method') ?? 'aliexpress.affiliate.product.query'
 
   const params: Record<string, string> = {
     method,
