@@ -49,15 +49,17 @@ export async function GET(req: NextRequest) {
   const callbackUrl = `${origin}/api/auth/aliexpress/callback`
   const timestamp = String(Date.now())
 
+  // redirect_uri doit être inclus DANS la signature
   const params: Record<string, string> = {
     app_key: APP_KEY,
     code,
+    redirect_uri: callbackUrl,
     sign_method: 'md5',
     timestamp,
   }
   params.sign = sign(params)
 
-  const body = new URLSearchParams({ ...params, redirect_uri: callbackUrl })
+  const body = new URLSearchParams(params)
 
   let tokenData: Record<string, unknown>
   try {
@@ -67,7 +69,23 @@ export async function GET(req: NextRequest) {
       body: body.toString(),
       cache: 'no-store',
     })
-    tokenData = await res.json()
+
+    const rawText = await res.text()
+    console.log('[AliExpress OAuth] Raw response:', rawText.slice(0, 500))
+
+    if (!rawText || rawText.trim() === '') {
+      return NextResponse.redirect(
+        `${origin}/admin?ae_error=${encodeURIComponent('Réponse vide du serveur AliExpress (token endpoint)')}`,
+      )
+    }
+
+    try {
+      tokenData = JSON.parse(rawText)
+    } catch {
+      return NextResponse.redirect(
+        `${origin}/admin?ae_error=${encodeURIComponent(`Réponse non-JSON: ${rawText.slice(0, 200)}`)}`,
+      )
+    }
   } catch (err) {
     return NextResponse.redirect(
       `${origin}/admin?ae_error=${encodeURIComponent(`Erreur réseau: ${err}`)}`,
