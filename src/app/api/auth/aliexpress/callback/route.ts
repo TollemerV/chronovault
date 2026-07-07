@@ -10,8 +10,18 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
 )
 
-/** Signature HMAC-MD5 standard AliExpress IOP */
-function sign(params: Record<string, string>): string {
+/**
+ * Signature SHA256 — utilisée par les endpoints "security" AliExpress
+ * Format: SHA256(APP_SECRET + sorted_params + APP_SECRET)
+ */
+function signSha256(params: Record<string, string>): string {
+  const sorted = Object.keys(params).sort()
+  const str = APP_SECRET + sorted.map(k => k + params[k]).join('') + APP_SECRET
+  return crypto.createHash('sha256').update(str, 'utf8').digest('hex').toUpperCase()
+}
+
+/** Signature MD5 — fallback pour les endpoints classiques */
+function signMd5(params: Record<string, string>): string {
   const sorted = Object.keys(params).sort()
   const str = APP_SECRET + sorted.map(k => k + params[k]).join('') + APP_SECRET
   return crypto.createHash('md5').update(str).digest('hex').toUpperCase()
@@ -25,9 +35,39 @@ async function saveSetting(key: string, value: string) {
 }
 
 /**
+ * Tente l'échange code → token avec une configuration donnée
+ */
+async function tryTokenExchange(
+  code: string,
+  callbackUrl: string,
+  timestamp: string,
+  useRedirectUri: boolean,
+  signMethod: 'sha256' | 'md5',
+): Promise<{ status: number; text: string }> {
+  const params: Record<string, string> = {
+    app_key: APP_KEY,
+    code,
+    sign_method: signMethod,
+    timestamp,
+  }
+  if (useRedirectUri) params.redirect_uri = callbackUrl
+
+  params.sign = signMethod === 'sha256' ? signSha256(params) : signMd5(params)
+
+  const body = new URLSearchParams(params)
+
+  const res = await fetch('https://api-sg.aliexpress.com/auth/token/security/create', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: body.toString(),
+    cache: 'no-store',
+  })
+  const text = await res.text()
+  return { status: res.status, text }
+}
+
+/**
  * GET /api/auth/aliexpress/callback
- * AliExpress redirige ici après autorisation avec un ?code=xxx
- * On échange ce code contre un access_token et on le stocke en Supabase
  */
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
@@ -45,73 +85,63 @@ export async function GET(req: NextRequest) {
     return NextResponse.redirect(`${origin}/admin?ae_error=${encodeURIComponent(msg)}`)
   }
 
-  /* ── Échange du code contre un token ── */
   const callbackUrl = `${origin}/api/auth/aliexpress/callback`
   const timestamp = String(Date.now())
 
-  // redirect_uri doit être inclus DANS la signature
-  const params: Record<string, string> = {
-    app_key: APP_KEY,
-    code,
-    redirect_uri: callbackUrl,
-    sign_method: 'md5',
-    timestamp,
-  }
-  params.sign = sign(params)
+  /* ── Essaie 4 combinaisons dans l'ordre ── */
+  const attempts: Array<[boolean, 'sha256' | 'md5']> = [
+    [false, 'sha256'],   // SHA256 sans redirect_uri (le plus courant)
+    [true,  'sha256'],   // SHA256 avec redirect_uri
+    [false, 'md5'],      // MD5 sans redirect_uri
+    [true,  'md5'],      // MD5 avec redirect_uri
+  ]
 
-  const body = new URLSearchParams(params)
+  let lastStatus = 0
+  let lastText = ''
 
-  let tokenData: Record<string, unknown>
-  try {
-    const res = await fetch('https://api-sg.aliexpress.com/auth/token/security/create', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: body.toString(),
-      cache: 'no-store',
-    })
-
-    const rawText = await res.text()
-    console.log('[AliExpress OAuth] Raw response:', rawText.slice(0, 500))
-
-    if (!rawText || rawText.trim() === '') {
-      return NextResponse.redirect(
-        `${origin}/admin?ae_error=${encodeURIComponent('Réponse vide du serveur AliExpress (token endpoint)')}`,
-      )
-    }
-
+  for (const [useRedirectUri, signMethod] of attempts) {
     try {
-      tokenData = JSON.parse(rawText)
-    } catch {
-      return NextResponse.redirect(
-        `${origin}/admin?ae_error=${encodeURIComponent(`Réponse non-JSON: ${rawText.slice(0, 200)}`)}`,
-      )
+      const { status, text } = await tryTokenExchange(code, callbackUrl, timestamp, useRedirectUri, signMethod)
+      lastStatus = status
+      lastText = text
+
+      console.log(`[AliExpress OAuth] Attempt ${signMethod}+redirect=${useRedirectUri} → HTTP ${status}: ${text.slice(0, 300)}`)
+
+      if (!text || text.trim() === '') continue // réponse vide → essai suivant
+
+      let data: Record<string, unknown>
+      try {
+        data = JSON.parse(text)
+      } catch {
+        continue // non-JSON → essai suivant
+      }
+
+      // Succès si access_token présent
+      if (data.access_token) {
+        await Promise.all([
+          saveSetting('ae_access_token', data.access_token as string),
+          saveSetting('ae_refresh_token', (data.refresh_token as string) ?? ''),
+          saveSetting('ae_token_expiry', String(data.expire_time ?? Date.now() + 30 * 24 * 3600 * 1000)),
+          saveSetting('ae_account_id', String(data.account_id ?? '')),
+          saveSetting('ae_connected_at', new Date().toISOString()),
+        ])
+        console.log('[AliExpress OAuth] ✅ Token sauvegardé, account_id:', data.account_id)
+        return NextResponse.redirect(`${origin}/admin?ae_connected=1`)
+      }
+
+      // Erreur explicite d'AliExpress
+      if (data.error || data.error_response) {
+        const errMsg = String(data.error_description ?? data.error ?? JSON.stringify(data).slice(0, 200))
+        console.error('[AliExpress OAuth] Erreur API:', errMsg)
+        return NextResponse.redirect(`${origin}/admin?ae_error=${encodeURIComponent(errMsg)}`)
+      }
+
+    } catch (fetchErr) {
+      console.error('[AliExpress OAuth] fetch error:', fetchErr)
     }
-  } catch (err) {
-    return NextResponse.redirect(
-      `${origin}/admin?ae_error=${encodeURIComponent(`Erreur réseau: ${err}`)}`,
-    )
   }
 
-  /* ── Vérification de la réponse ── */
-  if (tokenData.error || !tokenData.access_token) {
-    const errMsg = (tokenData.error_description ?? tokenData.error ?? JSON.stringify(tokenData)) as string
-    console.error('[AliExpress OAuth] Erreur token:', tokenData)
-    return NextResponse.redirect(
-      `${origin}/admin?ae_error=${encodeURIComponent(errMsg)}`,
-    )
-  }
-
-  /* ── Stockage sécurisé en Supabase ── */
-  await Promise.all([
-    saveSetting('ae_access_token', tokenData.access_token as string),
-    saveSetting('ae_refresh_token', tokenData.refresh_token as string ?? ''),
-    saveSetting('ae_token_expiry', String(tokenData.expire_time ?? Date.now() + 30 * 24 * 3600 * 1000)),
-    saveSetting('ae_account_id', String(tokenData.account_id ?? '')),
-    saveSetting('ae_connected_at', new Date().toISOString()),
-  ])
-
-  console.log('[AliExpress OAuth] ✅ Token sauvegardé, account_id:', tokenData.account_id)
-
-  /* ── Redirection vers l'admin avec succès ── */
-  return NextResponse.redirect(`${origin}/admin?ae_connected=1`)
+  // Tous les essais ont échoué
+  const debugMsg = `HTTP ${lastStatus} — ${lastText ? lastText.slice(0, 200) : 'réponse vide'}`
+  return NextResponse.redirect(`${origin}/admin?ae_error=${encodeURIComponent(debugMsg)}`)
 }
