@@ -5,6 +5,12 @@ import type { Product, Order } from '@/lib/types'
 
 type Tab = 'import' | 'products' | 'orders'
 
+interface AEStatus {
+  connected: boolean
+  connectedAt?: string
+  accountId?: string
+}
+
 export default function AdminPage() {
   const [password, setPassword] = useState('')
   const [authenticated, setAuthenticated] = useState(false)
@@ -33,6 +39,10 @@ export default function AdminPage() {
   const [products, setProducts] = useState<Product[]>([])
   const [orders, setOrders] = useState<Order[]>([])
 
+  /* AliExpress connexion */
+  const [aeStatus, setAeStatus] = useState<AEStatus>({ connected: false })
+  const [aeNotice, setAeNotice] = useState<{ ok: boolean; msg: string } | null>(null)
+
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault()
     if (password === 'admin') setAuthenticated(true)
@@ -44,7 +54,28 @@ export default function AdminPage() {
     if (res.ok) setOrders(await res.json())
   }
 
-  useEffect(() => { if (authenticated) loadOrders() }, [authenticated])
+  const loadAeStatus = async () => {
+    const res = await fetch('/api/auth/aliexpress/status')
+    if (res.ok) setAeStatus(await res.json())
+  }
+
+  useEffect(() => {
+    if (authenticated) {
+      loadOrders()
+      loadAeStatus()
+      // Vérifie si on revient du callback OAuth AliExpress
+      const params = new URLSearchParams(window.location.search)
+      if (params.get('ae_connected') === '1') {
+        setAeNotice({ ok: true, msg: '✓ Compte AliExpress connecté avec succès !' })
+        window.history.replaceState({}, '', '/admin')
+      }
+      if (params.get('ae_error')) {
+        setAeNotice({ ok: false, msg: `Erreur AliExpress : ${params.get('ae_error')}` })
+        window.history.replaceState({}, '', '/admin')
+      }
+    }
+  }, [authenticated])
+
 
   /* Auto-calcul prix de vente ×2.5 */
   useEffect(() => {
@@ -182,6 +213,33 @@ export default function AdminPage() {
             <span className="admin-stat-val">{orders.length}</span>
             <span className="admin-stat-label">Commandes</span>
           </div>
+        </div>
+
+        {/* AliExpress connexion */}
+        <div className="admin-ae-connect">
+          {aeNotice && (
+            <div className={`admin-ae-notice ${aeNotice.ok ? 'ok' : 'err'}`}>
+              {aeNotice.msg}
+            </div>
+          )}
+          {aeStatus.connected ? (
+            <div className="admin-ae-connected">
+              <span className="admin-ae-dot connected" />
+              <div>
+                <p className="admin-ae-label">AliExpress connecté</p>
+                {aeStatus.connectedAt && (
+                  <p className="admin-ae-sub">
+                    {new Date(aeStatus.connectedAt).toLocaleDateString('fr-FR')}
+                  </p>
+                )}
+              </div>
+              <a href="/api/auth/aliexpress" className="admin-ae-reconnect">↻</a>
+            </div>
+          ) : (
+            <a href="/api/auth/aliexpress" className="admin-ae-btn">
+              🔗 Connecter AliExpress
+            </a>
+          )}
         </div>
       </aside>
 

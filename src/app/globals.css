@@ -3873,3 +3873,56 @@ img { display: block; max-width: 100%; }
   background: rgba(34,197,94,0.04);
   border: 1px solid rgba(34,197,94,0.12);
 }
+
+/* ── Admin AliExpress Connect ── */
+.admin-ae-connect {
+  padding: 16px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+  margin-top: auto;
+}
+.admin-ae-btn {
+  display: block;
+  padding: 10px 14px;
+  background: rgba(201,168,76,0.08);
+  border: 1px solid var(--gold-line);
+  color: var(--gold-light);
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  text-align: center;
+  text-decoration: none;
+  transition: all 0.25s;
+}
+.admin-ae-btn:hover { background: var(--gold); color: var(--black); }
+
+.admin-ae-connected {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.admin-ae-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.admin-ae-dot.connected { background: #22c55e; box-shadow: 0 0 6px rgba(34,197,94,0.5); }
+.admin-ae-label { font-size: 0.68rem; color: var(--white); font-weight: 500; }
+.admin-ae-sub { font-size: 0.6rem; color: var(--grey); }
+.admin-ae-reconnect {
+  margin-left: auto;
+  color: var(--grey);
+  font-size: 1rem;
+  text-decoration: none;
+  transition: color 0.2s;
+}
+.admin-ae-reconnect:hover { color: var(--gold); }
+
+.admin-ae-notice {
+  font-size: 0.65rem;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  line-height: 1.4;
+}
+.admin-ae-notice.ok { background: rgba(34,197,94,0.08); color: #4ade80; border: 1px solid rgba(34,197,94,0.15); }
+.admin-ae-notice.err { background: rgba(239,68,68,0.08); color: #fc8181; border: 1px solid rgba(239,68,68,0.15); }
