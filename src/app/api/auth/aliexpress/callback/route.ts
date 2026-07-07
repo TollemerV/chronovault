@@ -4,7 +4,6 @@ import { createClient } from '@supabase/supabase-js'
 
 const APP_KEY = process.env.ALIEXPRESS_APP_KEY!
 const APP_SECRET = process.env.ALIEXPRESS_APP_SECRET!
-const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL ?? 'http://localhost:3000'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -35,14 +34,19 @@ export async function GET(req: NextRequest) {
   const code = searchParams.get('code')
   const error = searchParams.get('error')
 
+  // Dérive l'origine depuis la requête — fiable sur Vercel et localhost
+  const origin = req.headers.get('x-forwarded-host')
+    ? `https://${req.headers.get('x-forwarded-host')}`
+    : new URL(req.url).origin
+
   /* ── Erreur d'autorisation ── */
   if (error || !code) {
     const msg = error ?? 'code manquant'
-    return NextResponse.redirect(`${BASE_URL}/admin?ae_error=${encodeURIComponent(msg)}`)
+    return NextResponse.redirect(`${origin}/admin?ae_error=${encodeURIComponent(msg)}`)
   }
 
   /* ── Échange du code contre un token ── */
-  const callbackUrl = `${BASE_URL}/api/auth/aliexpress/callback`
+  const callbackUrl = `${origin}/api/auth/aliexpress/callback`
   const timestamp = String(Date.now())
 
   const params: Record<string, string> = {
@@ -66,7 +70,7 @@ export async function GET(req: NextRequest) {
     tokenData = await res.json()
   } catch (err) {
     return NextResponse.redirect(
-      `${BASE_URL}/admin?ae_error=${encodeURIComponent(`Erreur réseau: ${err}`)}`,
+      `${origin}/admin?ae_error=${encodeURIComponent(`Erreur réseau: ${err}`)}`,
     )
   }
 
@@ -75,7 +79,7 @@ export async function GET(req: NextRequest) {
     const errMsg = (tokenData.error_description ?? tokenData.error ?? JSON.stringify(tokenData)) as string
     console.error('[AliExpress OAuth] Erreur token:', tokenData)
     return NextResponse.redirect(
-      `${BASE_URL}/admin?ae_error=${encodeURIComponent(errMsg)}`,
+      `${origin}/admin?ae_error=${encodeURIComponent(errMsg)}`,
     )
   }
 
@@ -91,5 +95,5 @@ export async function GET(req: NextRequest) {
   console.log('[AliExpress OAuth] ✅ Token sauvegardé, account_id:', tokenData.account_id)
 
   /* ── Redirection vers l'admin avec succès ── */
-  return NextResponse.redirect(`${BASE_URL}/admin?ae_connected=1`)
+  return NextResponse.redirect(`${origin}/admin?ae_connected=1`)
 }
