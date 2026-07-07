@@ -98,9 +98,9 @@ export default function AdminPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           aliexpress_id: product.product_id,
-          title: product.subject,
+          title: product.product_title,
           images: [product.product_main_image_url],
-          price: parseFloat(product.sale_price),
+          price: parseFloat(product.target_sale_price),
           selling_price: sellingPrice,
           rating: parseFloat(product.evaluate_rate) / 20, // 0-100 → 0-5
           review_count: product.lastest_volume,
@@ -244,7 +244,7 @@ export default function AdminPage() {
                 <p className="admin-results-count">{total.toLocaleString()} résultats — page {page}</p>
                 <div className="admin-product-grid">
                   {results.map(p => {
-                    const cost = parseFloat(p.sale_price)
+                    const cost = parseFloat(p.target_sale_price)
                     const sell = calcPrice(cost)
                     const margin = Math.round(((sell - cost) / sell) * 100)
                     const isImported = imported.has(p.product_id)
@@ -255,20 +255,20 @@ export default function AdminPage() {
                         {isImported && <div className="admin-product-imported-badge">✓ Importé</div>}
 
                         <div className="admin-product-img">
-                          <img src={p.product_main_image_url} alt={p.subject} loading="lazy" />
+                          <img src={p.product_main_image_url} alt={p.product_title} loading="lazy" />
                         </div>
 
                         <div className="admin-product-body">
-                          <p className="admin-product-title">{p.subject}</p>
+                          <p className="admin-product-title">{p.product_title}</p>
 
                           <div className="admin-product-prices">
-                            <span className="admin-product-cost">Coût : {p.sale_price}€</span>
+                            <span className="admin-product-cost">Coût : {p.target_sale_price}€</span>
                             <span className="admin-product-sell">Vente : {sell.toFixed(2)}€</span>
                             <span className="admin-product-margin">+{margin}% marge</span>
                           </div>
 
                           <div className="admin-product-meta">
-                            <span>⭐ {(parseFloat(p.evaluate_rate) / 20).toFixed(1)}/5</span>
+                            <span>⭐ {(parseFloat(p.evaluate_rate ?? '0') / 20).toFixed(1)}/5</span>
                             <span>{p.lastest_volume} vendus</span>
                           </div>
 
