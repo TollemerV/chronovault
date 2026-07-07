@@ -62,8 +62,10 @@ export async function GET() {
     .order('created_at', { ascending: false })
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    // Table inexistante ou autre erreur Supabase → retourne tableau vide
+    console.warn('[orders] Supabase error:', error.message)
+    return NextResponse.json([])
   }
 
-  return NextResponse.json(data)
+  return NextResponse.json(data ?? [])
 }
