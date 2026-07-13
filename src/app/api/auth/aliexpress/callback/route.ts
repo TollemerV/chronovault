@@ -36,6 +36,7 @@ async function saveSetting(key: string, value: string) {
 
 /**
  * Tente l'échange code → token avec une configuration donnée
+ * AliExpress /auth/token/security/create attend un GET (pas POST)
  */
 async function tryTokenExchange(
   code: string,
@@ -54,14 +55,10 @@ async function tryTokenExchange(
 
   params.sign = signMethod === 'sha256' ? signSha256(params) : signMd5(params)
 
-  const body = new URLSearchParams(params)
+  const qs = new URLSearchParams(params).toString()
+  const url = `https://api-sg.aliexpress.com/auth/token/security/create?${qs}`
 
-  const res = await fetch('https://api-sg.aliexpress.com/auth/token/security/create', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: body.toString(),
-    cache: 'no-store',
-  })
+  const res = await fetch(url, { method: 'GET', cache: 'no-store' })
   const text = await res.text()
   return { status: res.status, text }
 }

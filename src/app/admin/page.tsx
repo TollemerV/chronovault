@@ -16,6 +16,14 @@ export default function AdminPage() {
   const [authenticated, setAuthenticated] = useState(false)
   const [tab, setTab] = useState<Tab>('import')
 
+  // Relit l'auth depuis localStorage au montage (survit aux redirections OAuth)
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('cv_admin_auth')
+      if (saved === 'true') setAuthenticated(true)
+    }
+  }, [])
+
   /* ── Import ── */
   const [importUrl, setImportUrl] = useState('')
   const [fetching, setFetching] = useState(false)
@@ -45,8 +53,12 @@ export default function AdminPage() {
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault()
-    if (password === 'admin') setAuthenticated(true)
-    else alert('Mot de passe incorrect')
+    if (password === 'admin') {
+      setAuthenticated(true)
+      localStorage.setItem('cv_admin_auth', 'true')
+    } else {
+      alert('Mot de passe incorrect')
+    }
   }
 
   const loadOrders = async () => {
