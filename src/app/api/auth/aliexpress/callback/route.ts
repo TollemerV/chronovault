@@ -35,8 +35,8 @@ async function saveSetting(key: string, value: string) {
 }
 
 /**
- * Tente l'échange code → token avec une configuration donnée
- * AliExpress /auth/token/security/create attend un GET (pas POST)
+ * Tente l'échange code → token via plusieurs endpoints/méthodes
+ * Returns raw { status, text } pour chaque tentative
  */
 async function tryTokenExchange(
   code: string,
@@ -44,6 +44,8 @@ async function tryTokenExchange(
   timestamp: string,
   useRedirectUri: boolean,
   signMethod: 'sha256' | 'md5',
+  httpMethod: 'GET' | 'POST',
+  endpointUrl: string,
 ): Promise<{ status: number; text: string }> {
   const params: Record<string, string> = {
     app_key: APP_KEY,
@@ -55,13 +57,22 @@ async function tryTokenExchange(
 
   params.sign = signMethod === 'sha256' ? signSha256(params) : signMd5(params)
 
-  const qs = new URLSearchParams(params).toString()
-  const url = `https://api-sg.aliexpress.com/auth/token/security/create?${qs}`
-
-  const res = await fetch(url, { method: 'GET', cache: 'no-store' })
+  let res: Response
+  if (httpMethod === 'GET') {
+    const qs = new URLSearchParams(params).toString()
+    res = await fetch(`${endpointUrl}?${qs}`, { method: 'GET', cache: 'no-store' })
+  } else {
+    res = await fetch(endpointUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(params).toString(),
+      cache: 'no-store',
+    })
+  }
   const text = await res.text()
   return { status: res.status, text }
 }
+
 
 /**
  * GET /api/auth/aliexpress/callback
@@ -85,26 +96,40 @@ export async function GET(req: NextRequest) {
   const callbackUrl = `${origin}/api/auth/aliexpress/callback`
   const timestamp = String(Date.now())
 
-  /* ── Essaie 4 combinaisons dans l'ordre ── */
-  const attempts: Array<[boolean, 'sha256' | 'md5']> = [
-    [false, 'sha256'],   // SHA256 sans redirect_uri (le plus courant)
-    [true,  'sha256'],   // SHA256 avec redirect_uri
-    [false, 'md5'],      // MD5 sans redirect_uri
-    [true,  'md5'],      // MD5 avec redirect_uri
+  /* ── Essaie toutes les combinaisons connues ── */
+  const ENDPOINTS = [
+    'https://api-sg.aliexpress.com/auth/token/security/create',
+    'https://api-sg.aliexpress.com/auth/token/create',
+    'https://api.aliexpress.com/auth/token/security/create',
   ]
+  type Attempt = { url: string; method: 'GET' | 'POST'; sign: 'sha256' | 'md5'; redirect: boolean }
+  const attempts: Attempt[] = []
+  for (const url of ENDPOINTS) {
+    for (const method of ['POST', 'GET'] as const) {
+      for (const sign of ['sha256', 'md5'] as const) {
+        attempts.push({ url, method, sign, redirect: false })
+        attempts.push({ url, method, sign, redirect: true })
+      }
+    }
+  }
 
   let lastStatus = 0
   let lastText = ''
 
-  for (const [useRedirectUri, signMethod] of attempts) {
+  for (const attempt of attempts) {
     try {
-      const { status, text } = await tryTokenExchange(code, callbackUrl, timestamp, useRedirectUri, signMethod)
+      const { status, text } = await tryTokenExchange(
+        code, callbackUrl, timestamp,
+        attempt.redirect, attempt.sign, attempt.method, attempt.url,
+      )
       lastStatus = status
       lastText = text
 
-      console.log(`[AliExpress OAuth] Attempt ${signMethod}+redirect=${useRedirectUri} → HTTP ${status}: ${text.slice(0, 300)}`)
+      console.log(`[AE OAuth] ${attempt.method} ${attempt.url.split('/').slice(-1)[0]} sign=${attempt.sign} redirect=${attempt.redirect} → HTTP ${status}: ${text.slice(0, 200)}`)
 
-      if (!text || text.trim() === '') continue // réponse vide → essai suivant
+      // Saute les réponses HTML (404/403 pages)
+      if (text.trim().startsWith('<')) continue
+      if (!text || text.trim() === '') continue
 
       let data: Record<string, unknown>
       try {
