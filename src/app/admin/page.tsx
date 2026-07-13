@@ -50,6 +50,9 @@ export default function AdminPage() {
   /* AliExpress connexion */
   const [aeStatus, setAeStatus] = useState<AEStatus>({ connected: false })
   const [aeNotice, setAeNotice] = useState<{ ok: boolean; msg: string } | null>(null)
+  const [showManualToken, setShowManualToken] = useState(false)
+  const [manualToken, setManualToken] = useState('')
+  const [savingToken, setSavingToken] = useState(false)
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault()
@@ -75,19 +78,41 @@ export default function AdminPage() {
     if (authenticated) {
       loadOrders()
       loadAeStatus()
-      // Vérifie si on revient du callback OAuth AliExpress
       const params = new URLSearchParams(window.location.search)
       if (params.get('ae_connected') === '1') {
         setAeNotice({ ok: true, msg: '✓ Compte AliExpress connecté avec succès !' })
+        loadAeStatus()
         window.history.replaceState({}, '', '/admin')
       }
       if (params.get('ae_error')) {
         setAeNotice({ ok: false, msg: `Erreur AliExpress : ${params.get('ae_error')}` })
         window.history.replaceState({}, '', '/admin')
       }
+      if (params.get('show_manual') === '1') {
+        setShowManualToken(true)
+        window.history.replaceState({}, '', '/admin')
+      }
     }
   }, [authenticated])
 
+  const handleManualTokenSave = async () => {
+    if (!manualToken.trim()) return
+    setSavingToken(true)
+    const res = await fetch('/api/auth/aliexpress/manual', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ access_token: manualToken }),
+    })
+    setSavingToken(false)
+    if (res.ok) {
+      setAeNotice({ ok: true, msg: '✓ Token AliExpress sauvegardé !' })
+      setShowManualToken(false)
+      setManualToken('')
+      loadAeStatus()
+    } else {
+      setAeNotice({ ok: false, msg: 'Erreur lors de la sauvegarde du token' })
+    }
+  }
 
   /* Auto-calcul prix de vente ×2.5 */
   useEffect(() => {
@@ -230,7 +255,7 @@ export default function AdminPage() {
         {/* AliExpress connexion */}
         <div className="admin-ae-connect">
           {aeNotice && (
-            <div className={`admin-ae-notice ${aeNotice.ok ? 'ok' : 'err'}`}>
+            <div className={`admin-ae-notice ${aeNotice.ok ? 'ok' : 'err'}`} onClick={() => setAeNotice(null)} style={{cursor:'pointer'}}>
               {aeNotice.msg}
             </div>
           )}
@@ -245,12 +270,39 @@ export default function AdminPage() {
                   </p>
                 )}
               </div>
-              <a href="/api/auth/aliexpress" className="admin-ae-reconnect">↻</a>
+              <a href="/api/auth/aliexpress" className="admin-ae-reconnect" title="Reconnecter">↻</a>
+            </div>
+          ) : showManualToken ? (
+            <div className="admin-ae-manual">
+              <p className="admin-ae-manual-label">Access Token AliExpress</p>
+              <textarea
+                className="admin-ae-manual-input"
+                placeholder="Colle ton token ici..."
+                value={manualToken}
+                onChange={e => setManualToken(e.target.value)}
+                rows={3}
+              />
+              <div className="admin-ae-manual-actions">
+                <button className="admin-ae-manual-save" onClick={handleManualTokenSave} disabled={savingToken}>
+                  {savingToken ? '...' : '✓ Sauvegarder'}
+                </button>
+                <button className="admin-ae-manual-cancel" onClick={() => setShowManualToken(false)}>
+                  Annuler
+                </button>
+              </div>
+              <p className="admin-ae-manual-hint">
+                Obtenir depuis <a href="https://openservice.aliexpress.com" target="_blank" rel="noreferrer">AliExpress Open Platform</a> → App → OAuth Token
+              </p>
             </div>
           ) : (
-            <a href="/api/auth/aliexpress" className="admin-ae-btn">
-              🔗 Connecter AliExpress
-            </a>
+            <>
+              <a href="/api/auth/aliexpress" className="admin-ae-btn">
+                🔗 Connecter AliExpress
+              </a>
+              <button className="admin-ae-manual-link" onClick={() => setShowManualToken(true)}>
+                Saisir le token manuellement
+              </button>
+            </>
           )}
         </div>
       </aside>

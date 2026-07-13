@@ -3926,3 +3926,31 @@ img { display: block; max-width: 100%; }
 }
 .admin-ae-notice.ok { background: rgba(34,197,94,0.08); color: #4ade80; border: 1px solid rgba(34,197,94,0.15); }
 .admin-ae-notice.err { background: rgba(239,68,68,0.08); color: #fc8181; border: 1px solid rgba(239,68,68,0.15); }
+
+/* ── Admin AE Manual Token ── */
+.admin-ae-manual { padding: 4px 0; }
+.admin-ae-manual-label { font-size: 0.6rem; color: var(--grey); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; }
+.admin-ae-manual-input {
+  width: 100%; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1);
+  color: var(--white); font-size: 0.6rem; padding: 8px; resize: none; font-family: monospace;
+  margin-bottom: 6px;
+}
+.admin-ae-manual-input::placeholder { color: var(--grey); }
+.admin-ae-manual-actions { display: flex; gap: 6px; margin-bottom: 6px; }
+.admin-ae-manual-save {
+  flex: 1; padding: 7px; background: var(--gold); color: var(--black); border: none;
+  font-size: 0.6rem; font-weight: 700; letter-spacing: 0.08em; cursor: pointer; text-transform: uppercase;
+}
+.admin-ae-manual-save:disabled { opacity: 0.5; cursor: not-allowed; }
+.admin-ae-manual-cancel {
+  padding: 7px 10px; background: transparent; color: var(--grey); border: 1px solid rgba(255,255,255,0.08);
+  font-size: 0.6rem; cursor: pointer;
+}
+.admin-ae-manual-hint { font-size: 0.55rem; color: var(--grey); line-height: 1.4; }
+.admin-ae-manual-hint a { color: var(--gold-light); text-decoration: none; }
+.admin-ae-manual-link {
+  display: block; width: 100%; margin-top: 6px; padding: 6px;
+  background: transparent; border: none; color: var(--grey); font-size: 0.58rem;
+  cursor: pointer; text-align: center; text-decoration: underline;
+}
+.admin-ae-manual-link:hover { color: var(--gold-light); }
