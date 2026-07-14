@@ -47,44 +47,56 @@ export async function GET(req: NextRequest) {
   }
 
   const callbackUrl = `${origin}/api/auth/aliexpress/callback`
-  const tsMs = String(Date.now())           // ex: "1720954800123"
-  const tsSec = String(Math.floor(Date.now() / 1000)) // ex: "1720954800"
+  const ts = String(Date.now())
 
-  // 3 variantes à tester dans l'ordre
-  const variants = [
-    { sign: signSha256, signMethod: 'sha256', timestamp: tsMs,  label: 'sha256-ms' },
-    { sign: signSha256, signMethod: 'sha256', timestamp: tsSec, label: 'sha256-sec' },
-    { sign: signMd5,   signMethod: 'md5',    timestamp: tsMs,  label: 'md5-ms' },
+  // Helpers pour construire les params signés
+  const buildParams = (signFn: (p: Record<string, string>) => string, signMethod: string) => {
+    const p: Record<string, string> = { app_key: APP_KEY, code, sign_method: signMethod, timestamp: ts }
+    p.sign = signFn(p)
+    return p
+  }
+
+  // Variantes à tester — on s'arrête au premier JSON valide
+  interface Variant { label: string; fn: () => Promise<Response> }
+  const variants: Variant[] = [
+    // 1. GET sur /auth/token/security/create (POST donnait 405 → essayons GET)
+    { label: 'GET-security-create-sha256', fn: () => {
+      const p = buildParams(signSha256, 'sha256')
+      return fetch(`https://api-sg.aliexpress.com/auth/token/security/create?${new URLSearchParams(p)}`, { method: 'GET', cache: 'no-store', signal: AbortSignal.timeout(7000) })
+    }},
+    // 2. POST JSON body
+    { label: 'POST-JSON-sha256', fn: () => {
+      const p = buildParams(signSha256, 'sha256')
+      return fetch('https://api-sg.aliexpress.com/auth/token/security/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p), cache: 'no-store', signal: AbortSignal.timeout(7000) })
+    }},
+    // 3. Gateway SYNC avec method en paramètre (format réel de la plupart des AE APIs)
+    { label: 'POST-SYNC-sha256', fn: () => {
+      const p: Record<string, string> = { method: '/auth/token/security/create', app_key: APP_KEY, code, sign_method: 'sha256', timestamp: ts }
+      p.sign = signSha256(p)
+      return fetch('https://api-sg.aliexpress.com/sync', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=utf-8' }, body: new URLSearchParams(p).toString(), cache: 'no-store', signal: AbortSignal.timeout(7000) })
+    }},
+    // 4. POST form-urlencoded avec charset (différence subtile parfois requise)
+    { label: 'POST-FORM-charset-sha256', fn: () => {
+      const p = buildParams(signSha256, 'sha256')
+      return fetch('https://api-sg.aliexpress.com/auth/token/security/create', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=utf-8' }, body: new URLSearchParams(p).toString(), cache: 'no-store', signal: AbortSignal.timeout(7000) })
+    }},
   ]
 
   let rawText = ''
   let httpStatus = 0
 
   for (const v of variants) {
-    const params: Record<string, string> = {
-      app_key: APP_KEY,
-      code,
-      sign_method: v.signMethod,
-      timestamp: v.timestamp,
-    }
-    params.sign = v.sign(params)
-
     try {
-      const res = await fetch('https://api-sg.aliexpress.com/auth/token/security/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams(params).toString(),
-        cache: 'no-store',
-        signal: AbortSignal.timeout(7000),
-      })
+      const res = await v.fn()
       httpStatus = res.status
       rawText = await res.text()
-      console.log(`[AE OAuth] variant=${v.label} HTTP ${httpStatus}: ${rawText.slice(0, 200)}`)
-      if (!rawText.trim().startsWith('<')) break  // réponse JSON → on sort
+      console.log(`[AE OAuth] ${v.label} HTTP ${httpStatus}: ${rawText.slice(0, 200)}`)
+      if (rawText.trim() && !rawText.trim().startsWith('<') && httpStatus !== 405) break
     } catch (err) {
-      console.error(`[AE OAuth] variant=${v.label} fetch error:`, err)
+      console.error(`[AE OAuth] ${v.label} error:`, err)
     }
   }
+
 
   // Page HTML = AliExpress refuse (permissions insuffisantes)
   if (rawText.trim().startsWith('<')) {
