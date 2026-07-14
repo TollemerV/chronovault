@@ -49,37 +49,34 @@ export async function GET(req: NextRequest) {
   const callbackUrl = `${origin}/api/auth/aliexpress/callback`
   const ts = String(Date.now())
 
-  // Helpers pour construire les params signés
-  const buildParams = (signFn: (p: Record<string, string>) => string, signMethod: string) => {
-    const p: Record<string, string> = { app_key: APP_KEY, code, sign_method: signMethod, timestamp: ts }
-    p.sign = signFn(p)
-    return p
+  // Helper: signe UNIQUEMENT les params métier (sans method pour SYNC)
+  const syncBody = (methodName: string, extraParams?: Record<string, string>) => {
+    // Params signés = app_key + code + sign_method + timestamp (PAS method)
+    const signedParams: Record<string, string> = {
+      app_key: APP_KEY,
+      code,
+      sign_method: 'sha256',
+      timestamp: ts,
+      ...extraParams,
+    }
+    const sign = signSha256(signedParams)
+    // Body final = method (non signé) + params signés + sign
+    return new URLSearchParams({ method: methodName, ...signedParams, sign }).toString()
   }
 
-  // Variantes à tester — on s'arrête au premier JSON valide
-  interface Variant { label: string; fn: () => Promise<Response> }
+  // Variantes SYNC uniquement — on s'arrête au premier succès non-erreur
+  interface Variant { label: string; body: string }
   const variants: Variant[] = [
-    // 1. GET sur /auth/token/security/create (POST donnait 405 → essayons GET)
-    { label: 'GET-security-create-sha256', fn: () => {
-      const p = buildParams(signSha256, 'sha256')
-      return fetch(`https://api-sg.aliexpress.com/auth/token/security/create?${new URLSearchParams(p)}`, { method: 'GET', cache: 'no-store', signal: AbortSignal.timeout(7000) })
-    }},
-    // 2. POST JSON body
-    { label: 'POST-JSON-sha256', fn: () => {
-      const p = buildParams(signSha256, 'sha256')
-      return fetch('https://api-sg.aliexpress.com/auth/token/security/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p), cache: 'no-store', signal: AbortSignal.timeout(7000) })
-    }},
-    // 3. Gateway SYNC avec method en paramètre (format réel de la plupart des AE APIs)
-    { label: 'POST-SYNC-sha256', fn: () => {
-      const p: Record<string, string> = { method: '/auth/token/security/create', app_key: APP_KEY, code, sign_method: 'sha256', timestamp: ts }
-      p.sign = signSha256(p)
-      return fetch('https://api-sg.aliexpress.com/sync', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=utf-8' }, body: new URLSearchParams(p).toString(), cache: 'no-store', signal: AbortSignal.timeout(7000) })
-    }},
-    // 4. POST form-urlencoded avec charset (différence subtile parfois requise)
-    { label: 'POST-FORM-charset-sha256', fn: () => {
-      const p = buildParams(signSha256, 'sha256')
-      return fetch('https://api-sg.aliexpress.com/auth/token/security/create', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=utf-8' }, body: new URLSearchParams(p).toString(), cache: 'no-store', signal: AbortSignal.timeout(7000) })
-    }},
+    // Essai 1: méthode en chemin direct (sans slash)
+    { label: 'SYNC-no-slash',  body: syncBody('auth/token/security/create') },
+    // Essai 2: méthode en chemin avec slash
+    { label: 'SYNC-slash',     body: syncBody('/auth/token/security/create') },
+    // Essai 3: nom de méthode style AliExpress SYNC standard
+    { label: 'SYNC-dotted',    body: syncBody('aliexpress.system.oauth.token.security.create') },
+    // Essai 4: sans "security"
+    { label: 'SYNC-no-sec',    body: syncBody('aliexpress.system.oauth.token.create') },
+    // Essai 5: avec redirect_uri signé
+    { label: 'SYNC-redirect',  body: syncBody('/auth/token/security/create', { redirect_uri: callbackUrl }) },
   ]
 
   let rawText = ''
@@ -87,11 +84,19 @@ export async function GET(req: NextRequest) {
 
   for (const v of variants) {
     try {
-      const res = await v.fn()
+      const res = await fetch('https://api-sg.aliexpress.com/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=utf-8' },
+        body: v.body,
+        cache: 'no-store',
+        signal: AbortSignal.timeout(7000),
+      })
       httpStatus = res.status
       rawText = await res.text()
-      console.log(`[AE OAuth] ${v.label} HTTP ${httpStatus}: ${rawText.slice(0, 200)}`)
-      if (rawText.trim() && !rawText.trim().startsWith('<') && httpStatus !== 405) break
+      console.log(`[AE OAuth] ${v.label} HTTP ${httpStatus}: ${rawText.slice(0, 250)}`)
+      // Continue si erreur de signature — stop si autre erreur JSON ou succès
+      const isSignErr = rawText.includes('IncompleteSignature') || rawText.includes('InvalidSignature')
+      if (!rawText.trim().startsWith('<') && !isSignErr) break
     } catch (err) {
       console.error(`[AE OAuth] ${v.label} error:`, err)
     }
