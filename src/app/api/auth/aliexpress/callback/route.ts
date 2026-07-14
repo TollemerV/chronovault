@@ -27,6 +27,12 @@ async function saveSetting(key: string, value: string) {
  */
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
+
+  // Log TOUS les paramètres reçus d'AliExpress
+  const allParams: Record<string, string> = {}
+  searchParams.forEach((v, k) => { allParams[k] = v })
+  console.log('[AE Callback] Params reçus:', JSON.stringify(allParams))
+
   const code = searchParams.get('code')
   const error = searchParams.get('error')
 
@@ -41,36 +47,43 @@ export async function GET(req: NextRequest) {
   }
 
   const callbackUrl = `${origin}/api/auth/aliexpress/callback`
-  const timestamp = String(Date.now())
+  const tsMs = String(Date.now())           // ex: "1720954800123"
+  const tsSec = String(Math.floor(Date.now() / 1000)) // ex: "1720954800"
 
-  // Tentative unique — POST + SHA256 (format IOP standard AliExpress)
-  const params: Record<string, string> = {
-    app_key: APP_KEY,
-    code,
-    sign_method: 'sha256',
-    timestamp,
-  }
-  params.sign = signSha256(params)
+  // 3 variantes à tester dans l'ordre
+  const variants = [
+    { sign: signSha256, signMethod: 'sha256', timestamp: tsMs,  label: 'sha256-ms' },
+    { sign: signSha256, signMethod: 'sha256', timestamp: tsSec, label: 'sha256-sec' },
+    { sign: signMd5,   signMethod: 'md5',    timestamp: tsMs,  label: 'md5-ms' },
+  ]
 
   let rawText = ''
   let httpStatus = 0
 
-  try {
-    const res = await fetch('https://api-sg.aliexpress.com/auth/token/security/create', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams(params).toString(),
-      cache: 'no-store',
-      signal: AbortSignal.timeout(8000),
-    })
-    httpStatus = res.status
-    rawText = await res.text()
-    console.log(`[AE OAuth] HTTP ${httpStatus}: ${rawText.slice(0, 300)}`)
-  } catch (err) {
-    console.error('[AE OAuth] fetch error:', err)
-    return NextResponse.redirect(
-      `${origin}/admin?ae_error=${encodeURIComponent(`Erreur réseau: ${err}`)}`,
-    )
+  for (const v of variants) {
+    const params: Record<string, string> = {
+      app_key: APP_KEY,
+      code,
+      sign_method: v.signMethod,
+      timestamp: v.timestamp,
+    }
+    params.sign = v.sign(params)
+
+    try {
+      const res = await fetch('https://api-sg.aliexpress.com/auth/token/security/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams(params).toString(),
+        cache: 'no-store',
+        signal: AbortSignal.timeout(7000),
+      })
+      httpStatus = res.status
+      rawText = await res.text()
+      console.log(`[AE OAuth] variant=${v.label} HTTP ${httpStatus}: ${rawText.slice(0, 200)}`)
+      if (!rawText.trim().startsWith('<')) break  // réponse JSON → on sort
+    } catch (err) {
+      console.error(`[AE OAuth] variant=${v.label} fetch error:`, err)
+    }
   }
 
   // Page HTML = AliExpress refuse (permissions insuffisantes)
