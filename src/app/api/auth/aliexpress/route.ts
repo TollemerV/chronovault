@@ -19,6 +19,8 @@ export async function GET(req: NextRequest) {
   authUrl.searchParams.set('client_id', APP_KEY)
   authUrl.searchParams.set('redirect_uri', callbackUrl)
   authUrl.searchParams.set('state', `chronovault-${Date.now()}`)
+  authUrl.searchParams.set('sp', 'ae')       // active les permissions DS AliExpress
+  authUrl.searchParams.set('view', 'web')    // force la vue web (meilleure compat)
 
   return NextResponse.redirect(authUrl.toString())
 }
